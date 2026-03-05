@@ -249,7 +249,7 @@ function showResults() {
   document.getElementById("totalBadge").textContent =
     `${allPermissions.length} permission${allPermissions.length !== 1 ? "s" : ""}`;
 
-  // Reset filters
+  // Reset filters – for Fluent pivot buttons (class fui-pivot-btn)
   activeType = "all";
   activeText = "";
   document.getElementById("textFilter").value = "";
@@ -268,24 +268,24 @@ function renderSummaryStrip() {
     SendOnBehalf:  allPermissions.filter((p) => p.PermissionType === "SendOnBehalf").length,
   };
 
+  // Fluent metric colour tokens per permission type
   const items = [
-    { type: "FullAccess",   icon: "bi-folder2-open", label: "Full Access",    color: "danger",  count: counts.FullAccess   },
-    { type: "SendAs",       icon: "bi-send",         label: "Send As",        color: "warning", count: counts.SendAs       },
-    { type: "SendOnBehalf", icon: "bi-send-check",   label: "Send on Behalf", color: "info",    count: counts.SendOnBehalf },
+    { type: "FullAccess",   icon: "bi-folder2-open", label: "Full Access",    iconColor: "var(--fui-danger-fg)",  count: counts.FullAccess   },
+    { type: "SendAs",       icon: "bi-send",         label: "Send As",        iconColor: "var(--fui-warning-fg)", count: counts.SendAs       },
+    { type: "SendOnBehalf", icon: "bi-send-check",   label: "Send on Behalf", iconColor: "var(--fui-info-fg)",    count: counts.SendOnBehalf },
   ];
 
   const strip = document.getElementById("summaryStrip");
-  strip.innerHTML = items.map((item, i) => `
+  strip.innerHTML = items.map((item) => `
     <div
-      class="col-md-4 summary-col ${item.count > 0 ? "" : "text-muted"}"
+      class="summary-col${item.count > 0 ? "" : " text-muted"}"
       role="${item.count > 0 ? "button" : ""}"
       data-filter-type="${escHtml(item.type)}"
       title="${item.count > 0 ? `Filter to ${escHtml(item.label)}` : ""}"
-      ${i < items.length - 1 ? 'style="border-right:1px solid rgba(0,0,0,.07);"' : ""}
     >
-      <i class="bi ${item.icon} text-${item.color}" style="font-size:1.4rem;"></i>
-      <div class="fw-bold fs-4 lh-1 mt-1">${item.count}</div>
-      <div class="small text-muted mt-1">${escHtml(item.label)}</div>
+      <i class="bi ${item.icon}" style="font-size:20px;color:${item.count > 0 ? item.iconColor : "var(--fui-fg-4)"};" aria-hidden="true"></i>
+      <span style="font-size:28px;font-weight:700;line-height:1;color:${item.count > 0 ? "var(--fui-fg-1)" : "var(--fui-fg-4)"};margin-top:4px;">${item.count}</span>
+      <span style="font-size:12px;color:var(--fui-fg-3);margin-top:2px;">${escHtml(item.label)}</span>
     </div>
   `).join("");
 
@@ -297,10 +297,11 @@ function renderSummaryStrip() {
   });
 }
 
+// Fluent badge variant classes (rectangular, status-coloured)
 const TYPE_BADGE = {
-  FullAccess:   "badge-fullaccess",
-  SendAs:       "badge-sendas",
-  SendOnBehalf: "badge-sendonbehalf",
+  FullAccess:   "badge fui-badge--danger",
+  SendAs:       "badge fui-badge--warning",
+  SendOnBehalf: "badge fui-badge--info",
 };
 
 function renderTable() {
@@ -343,16 +344,16 @@ function renderTable() {
 
   tbody.innerHTML = rows.map((p) => `
     <tr>
-      <td>
+      <td style="padding-left:20px!important;">
         <div class="fw-semibold">${escHtml(p.MailboxDisplayName || p.MailboxUPN || "—")}</div>
       </td>
-      <td class="text-muted small">${escHtml(p.MailboxUPN || "")}</td>
+      <td class="text-muted" style="font-size:13px;">${escHtml(p.MailboxUPN || "")}</td>
       <td>
-        <span class="badge rounded-pill px-2 py-1 ${TYPE_BADGE[p.PermissionType] || "bg-secondary"}">
+        <span class="${TYPE_BADGE[p.PermissionType] || "badge"}">
           ${escHtml(p.PermissionType || "")}
         </span>
       </td>
-      <td class="text-muted small">${escHtml(p.MailboxType || "")}</td>
+      <td class="text-muted" style="font-size:13px;">${escHtml(p.MailboxType || "")}</td>
     </tr>
   `).join("");
 }
