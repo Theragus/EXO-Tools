@@ -84,6 +84,11 @@ Session(app)
 # the Flask session avoids the 4 KB browser cookie size limit entirely – the
 # session cookie carries only a tiny session-ID / user-identity dict while
 # the bulky MSAL blobs (refresh tokens, account metadata, etc.) live on disk.
+# How long MSAL token caches persist on disk before automatic expiry (seconds).
+# 24 hours is generous for a work session; refresh tokens within the cache
+# are valid for 90 days so a re-login after expiry is inexpensive.
+_MSAL_CACHE_TTL = 86400  # 24 hours
+
 _msal_cache_dir = os.path.join(_session_dir, "msal_tokens")
 os.makedirs(_msal_cache_dir, exist_ok=True)
 _msal_store = FileSystemCache(
@@ -146,7 +151,7 @@ def _save_cache(cache: msal.SerializableTokenCache, oid: str | None = None) -> N
     cache_data = json.loads(cache.serialize())
     cache_data.pop("AccessToken", None)
     cache_data.pop("IdToken", None)
-    _msal_store.set(f"msal:{oid}", json.dumps(cache_data), timeout=86400)
+    _msal_store.set(f"msal:{oid}", json.dumps(cache_data), timeout=_MSAL_CACHE_TTL)
 
 
 def _get_token_from_cache(scopes: list[str] | None = None):
@@ -284,10 +289,19 @@ def callback():
     # xms_* extension claims, nonce, etc.).  We persist only what the
     # application actually reads – this keeps the session cookie tiny.
     claims = result.get("id_token_claims", {})
+    user_oid = claims.get("oid")
+    if not user_oid:
+        logger.error("Azure AD token is missing the 'oid' claim – cannot establish session")
+        return render_template(
+            "login.html",
+            auth_url=None,
+            error="Authentication failed: the identity token is missing required claims.",
+        ), 400
+
     session["user"] = {
         "name": claims.get("name", ""),
         "preferred_username": claims.get("preferred_username", ""),
-        "oid": claims.get("oid", ""),
+        "oid": user_oid,
         "tid": claims.get("tid", ""),
         # Keep the groups claim for the fast-path group-membership check.
         # Azure AD only includes groups here when the count is small (<= 6 by
@@ -299,7 +313,7 @@ def callback():
     # Persist the MSAL token cache to the *filesystem* (not the session).
     # This is the key change that prevents the Set-Cookie header from
     # exceeding the 4 KB browser limit.
-    _save_cache(cache, oid=claims.get("oid", ""))
+    _save_cache(cache, oid=user_oid)
 
     next_url = session.pop("next", url_for("index"))
     return redirect(next_url)
