@@ -14,6 +14,7 @@ const crypto = require("crypto");
 const express = require("express");
 const session = require("express-session");
 const FileStore = require("session-file-store")(session);
+const rateLimit = require("express-rate-limit");
 const msal = require("@azure/msal-node");
 const axios = require("axios");
 
@@ -43,6 +44,21 @@ app.use(express.json());
 
 // Serve static files
 app.use("/static", express.static(path.join(__dirname, "static")));
+
+// CSRF protection for API mutation endpoints.
+// Verify that POST/PUT/PATCH/DELETE requests to /api/* include a JSON
+// Content-Type header.  Browsers cannot send cross-origin requests with
+// this content type from plain HTML forms, so this check effectively
+// prevents CSRF attacks on the API endpoints.
+app.use("/api", (req, res, next) => {
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+    const ct = req.headers["content-type"] || "";
+    if (!ct.includes("application/json")) {
+      return res.status(415).json({ error: "Content-Type must be application/json" });
+    }
+  }
+  next();
+});
 
 // ---------------------------------------------------------------------------
 // Session directory setup
@@ -93,6 +109,30 @@ app.use(
     },
   })
 );
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+
+// General API rate limiter: 60 requests per minute per IP
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please try again later." },
+});
+app.use("/api/", apiLimiter);
+
+// Stricter limiter for the permission-check endpoint (expensive PowerShell call)
+const permissionsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many permission check requests, please try again later." },
+});
+app.use("/api/get-permissions", permissionsLimiter);
 
 // ---------------------------------------------------------------------------
 // MSAL token cache (filesystem-backed)
