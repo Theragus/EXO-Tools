@@ -52,7 +52,7 @@ app.use("/static", express.static(path.join(__dirname, "static")));
  * Return the first writable candidate directory, creating it if needed.
  */
 function findSessionDir(preferred) {
-  for (const candidate of [preferred, "/tmp/flask_session"]) {
+  for (const candidate of [preferred, "/tmp/exo_session"]) {
     try {
       fs.mkdirSync(candidate, { recursive: true });
       const probe = path.join(candidate, ".write_probe");
@@ -64,7 +64,7 @@ function findSessionDir(preferred) {
     }
   }
   throw new Error(
-    `No writable session directory found. Tried: ${preferred} and /tmp/flask_session. ` +
+    `No writable session directory found. Tried: ${preferred} and /tmp/exo_session. ` +
       "Set SESSION_FILE_DIR to a writable path."
   );
 }

@@ -9,7 +9,7 @@ const config = {
   // Express
   SECRET_KEY: process.env.SECRET_KEY || require("crypto").randomBytes(24).toString("hex"),
   SESSION_COOKIE_HTTPONLY: true,
-  SESSION_COOKIE_SAMESITE: "lax",
+  SESSION_COOKIE_SAMESITE: "Lax",
   // Use secure cookies in production (HTTPS)
   SESSION_COOKIE_SECURE: (process.env.NODE_ENV || "production") === "production",
 
