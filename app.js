@@ -114,25 +114,71 @@ app.use(
 // Rate limiting
 // ---------------------------------------------------------------------------
 
+// Azure App Service (and some reverse proxies) include the client port in the
+// X-Forwarded-For header (e.g. "91.37.41.151:59928").  With trust proxy: 1,
+// Express propagates that raw string as req.ip, which express-rate-limit
+// rejects as an invalid IP address.  This helper strips the port so every
+// rate-limiter receives a plain IP address as its key.
+function ipKey(req) {
+  const ip = req.ip || req.socket.remoteAddress || "";
+  // Bracket-notation IPv6 with port: "[2001:db8::1]:12345" → "[2001:db8::1]"
+  if (ip.startsWith("[")) {
+    return ip.replace(/\]:.*$/, "]");
+  }
+  // IPv4 with port: "1.2.3.4:12345" → "1.2.3.4" (exactly one colon)
+  const colonCount = (ip.match(/:/g) || []).length;
+  if (colonCount === 1) {
+    return ip.substring(0, ip.lastIndexOf(":"));
+  }
+  // Pure IPv4 or bare IPv6 – return as-is.
+  // An empty string here (no remote address at all) is an extreme edge case;
+  // Express always populates req.socket.remoteAddress for live TCP connections.
+  return ip || "unknown";
+}
+
 // General API rate limiter: 60 requests per minute per IP
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: ipKey,
   message: { error: "Too many requests, please try again later." },
 });
 app.use("/api/", apiLimiter);
 
-// Stricter limiter for the permission-check endpoint (expensive PowerShell call)
+// Stricter limiter for the permission-check endpoint (expensive PowerShell call).
+// Only applied to the POST (job-start) route, not the GET (poll) route.
 const permissionsLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: ipKey,
   message: { error: "Too many permission check requests, please try again later." },
 });
-app.use("/api/get-permissions", permissionsLimiter);
+
+// ---------------------------------------------------------------------------
+// Async permission-check job store
+// ---------------------------------------------------------------------------
+
+/**
+ * In-memory map of jobId → job object.
+ * Each job: { status, upn, oid, startedAt, result, error }
+ * status: "pending" | "done" | "error"
+ */
+const jobs = new Map();
+
+// Purge completed/failed jobs older than 1 hour to prevent unbounded growth.
+// Only removes non-pending jobs so active long-running checks are never evicted
+// mid-flight (PS_TIMEOUT caps execution at ≤ 600 s, so in practice no pending
+// job survives 1 hour, but we guard defensively).
+setInterval(() => {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [id, job] of jobs) {
+    if (job.status !== "pending" && job.startedAt < cutoff) jobs.delete(id);
+  }
+}, 10 * 60 * 1000).unref();
 
 // Auth route rate limiter: prevent brute-force / enumeration on login and
 // callback endpoints (30 attempts per 15 minutes per IP).
@@ -141,6 +187,7 @@ const authLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: ipKey,
   message: "Too many authentication attempts. Please try again later.",
 });
 
@@ -594,7 +641,8 @@ app.get("/api/search-users", loginRequired, async (req, res) => {
   }
 });
 
-app.post("/api/get-permissions", loginRequired, (req, res) => {
+// POST – start a permission-check job (returns immediately with a jobId).
+app.post("/api/get-permissions", permissionsLimiter, loginRequired, (req, res) => {
   const upn = ((req.body && req.body.userPrincipalName) || "").trim();
 
   // Input validation – strict UPN format to prevent injection
@@ -645,60 +693,103 @@ app.post("/api/get-permissions", loginRequired, (req, res) => {
     args.push("-CertificatePassword", config.EXO_CERT_PASSWORD);
   }
 
-  logger.info(`Starting permission check for: ${upn}`);
+  // Create the job record and return its ID immediately so the HTTP connection
+  // is not held open while PowerShell runs (avoids 504 Gateway Timeout).
+  const jobId = crypto.randomUUID();
+  const oid = req.session.user.oid;
+  jobs.set(jobId, { status: "pending", upn, oid, startedAt: Date.now(), result: null, error: null });
+
+  logger.info(`Starting permission check for: ${upn} (jobId=${jobId})`);
 
   const child = execFile(
     config.PWSH_PATH,
     args,
     { timeout: config.PS_TIMEOUT * 1000, maxBuffer: 50 * 1024 * 1024 },
     (err, stdout, stderr) => {
+      const job = jobs.get(jobId);
+      if (!job) return; // job was already cleaned up
+
       if (err) {
         if (err.killed || err.signal === "SIGTERM") {
-          return res.status(504).json({
-            error:
-              "The permission check timed out. " +
-              "This usually happens on very large tenants. " +
-              "Consider increasing PS_TIMEOUT.",
-          });
+          job.status = "error";
+          job.error =
+            "The permission check timed out. " +
+            "This usually happens on very large tenants. " +
+            "Consider increasing PS_TIMEOUT.";
+          return;
         }
         if (err.code === "ENOENT") {
-          return res.status(500).json({
-            error: `PowerShell not found at '${config.PWSH_PATH}'. ` +
-              "Please install PowerShell Core and set the PWSH_PATH environment variable.",
-          });
+          job.status = "error";
+          job.error =
+            `PowerShell not found at '${config.PWSH_PATH}'. ` +
+            "Please install PowerShell Core and set the PWSH_PATH environment variable.";
+          return;
         }
 
         const errMsg = (stderr || "").trim() || "PowerShell exited with a non-zero status.";
         logger.error(`PowerShell stderr: ${errMsg.substring(0, 500)}`);
-        return res.status(500).json({
-          error: `Permission check failed: ${errMsg.substring(0, 300)}`,
-        });
+        job.status = "error";
+        job.error = `Permission check failed: ${errMsg.substring(0, 300)}`;
+        return;
       }
 
       const output = (stdout || "").trim();
       const permissions = parsePsJson(output);
       logger.info(
-        `Permission check complete. Found ${permissions.length} permissions.`
+        `Permission check complete. Found ${permissions.length} permissions. (jobId=${jobId})`
       );
-      return res.json({
-        permissions,
-        user: upn,
-        count: permissions.length,
-      });
+      job.status = "done";
+      job.result = { permissions, user: upn, count: permissions.length };
     }
   );
 
-  // Handle spawn errors (e.g. ENOENT if pwsh not found)
+  // Handle spawn errors (e.g. ENOENT if pwsh not found before the process starts)
   child.on("error", (err) => {
+    const job = jobs.get(jobId);
+    if (!job) return;
     if (err.code === "ENOENT") {
-      return res.status(500).json({
-        error: `PowerShell not found at '${config.PWSH_PATH}'. ` +
-          "Please install PowerShell Core and set the PWSH_PATH environment variable.",
-      });
+      job.status = "error";
+      job.error =
+        `PowerShell not found at '${config.PWSH_PATH}'. ` +
+        "Please install PowerShell Core and set the PWSH_PATH environment variable.";
+      return;
     }
     logger.error(`Unexpected error during permission check: ${err.message}`);
-    return res.status(500).json({ error: `Internal server error: ${err.message}` });
+    job.status = "error";
+    job.error = `Internal server error: ${err.message}`;
   });
+
+  // Return 202 Accepted with the job ID – the client will poll for results.
+  return res.status(202).json({ jobId });
+});
+
+// GET – poll the status of an existing permission-check job.
+app.get("/api/get-permissions/:jobId", loginRequired, (req, res) => {
+  const { jobId } = req.params;
+
+  // Validate jobId is a well-formed UUID to guard against path traversal etc.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(jobId)) {
+    return res.status(400).json({ error: "Invalid job ID." });
+  }
+
+  const job = jobs.get(jobId);
+  if (!job) {
+    return res.status(404).json({ error: "Job not found or expired." });
+  }
+
+  // Prevent one user from polling another user's job.
+  if (job.oid !== req.session.user.oid) {
+    return res.status(403).json({ error: "Access denied." });
+  }
+
+  if (job.status === "pending") {
+    return res.json({ status: "pending" });
+  }
+  if (job.status === "error") {
+    return res.status(500).json({ status: "error", error: job.error });
+  }
+  // done
+  return res.json({ status: "done", ...job.result });
 });
 
 /**
