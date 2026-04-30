@@ -10,12 +10,12 @@ Repo: EXO-Tools
 
 ## Commands Used
 - `rg -n --hidden --glob '!.git' '(AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA|EC|OPENSSH|DSA|PRIVATE) KEY-----|xox[baprs]-[0-9A-Za-z-]{10,}|ghp_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{82}|SECRET_KEY|DATABASE_URL|TOKEN=|password\s*=)' .`
-- `git grep -n -I -e 'AKIA[0-9A-Z]{16}' $(git rev-list --all)`
-- `git grep -n -I -e 'ghp_[0-9A-Za-z]{36}' $(git rev-list --all)`
-- `git grep -n -I -e 'github_pat_[0-9A-Za-z_]{82}' $(git rev-list --all)`
-- `git grep -n -I -e 'AIza[0-9A-Za-z\-_]{35}' $(git rev-list --all)`
-- `git grep -n -I -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' $(git rev-list --all)`
-- `git grep -n -I -e 'xox[baprs]-[0-9A-Za-z-]{10,}' $(git rev-list --all)`
+- `git grep -n -I -E -e 'AKIA[0-9A-Z]{16}' $(git rev-list --all)`
+- `git grep -n -I -E -e 'ghp_[0-9A-Za-z]{36}' $(git rev-list --all)`
+- `git grep -n -I -E -e 'github_pat_[0-9A-Za-z_]{82}' $(git rev-list --all)`
+- `git grep -n -I -E -e 'AIza[0-9A-Za-z\-_]{35}' $(git rev-list --all)`
+- `git grep -n -I -E -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' $(git rev-list --all)`
+- `git grep -n -I -E -e 'xox[baprs]-[0-9A-Za-z-]{10,}' $(git rev-list --all)`
 - `git log --name-only --pretty=format: -- . | rg '^\.env($|\.)'`
 
 ## Findings
