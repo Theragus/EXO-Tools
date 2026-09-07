@@ -155,6 +155,16 @@ cp .env.example .env
 
 ## Deployment
 
+## Testing
+
+```bash
+npm test
+```
+
+The test suite is a lightweight smoke/regression check for core app behavior so
+dependency updates can be validated without live Azure, Graph, or PowerShell
+calls.
+
 ### Option A – Docker (recommended for Azure Container Apps / self-hosted)
 
 ```bash
