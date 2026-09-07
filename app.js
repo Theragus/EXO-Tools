@@ -15,6 +15,7 @@ const express = require("express");
 const session = require("express-session");
 const FileStore = require("session-file-store")(session);
 const rateLimit = require("express-rate-limit");
+const { ipKeyGenerator } = rateLimit;
 const msal = require("@azure/msal-node");
 const axios = require("axios");
 
@@ -120,20 +121,20 @@ app.use(
 // rejects as an invalid IP address.  This helper strips the port so every
 // rate-limiter receives a plain IP address as its key.
 function ipKey(req) {
-  const ip = req.ip || req.socket.remoteAddress || "";
+  let ip = req.ip || req.socket.remoteAddress || "";
   // Bracket-notation IPv6 with port: "[2001:db8::1]:12345" → "[2001:db8::1]"
   if (ip.startsWith("[")) {
-    return ip.replace(/\]:.*$/, "]");
+    ip = ip.replace(/\]:.*$/, "]");
   }
   // IPv4 with port: "1.2.3.4:12345" → "1.2.3.4" (exactly one colon)
   const colonCount = (ip.match(/:/g) || []).length;
   if (colonCount === 1) {
-    return ip.substring(0, ip.lastIndexOf(":"));
+    ip = ip.substring(0, ip.lastIndexOf(":"));
   }
   // Pure IPv4 or bare IPv6 – return as-is.
   // An empty string here (no remote address at all) is an extreme edge case;
   // Express always populates req.socket.remoteAddress for live TCP connections.
-  return ip || "unknown";
+  return ipKeyGenerator(ip || "127.0.0.1");
 }
 
 // General API rate limiter: 60 requests per minute per IP
@@ -793,13 +794,17 @@ app.post("/api/get-permissions", permissionsLimiter, loginRequired, (req, res) =
 });
 
 // GET – poll the status of an existing permission-check job.
-app.get("/api/get-permissions/:jobId", loginRequired, (req, res) => {
+app.get("/api/get-permissions/:jobId", (req, res, next) => {
   const { jobId } = req.params;
 
   // Validate jobId is a well-formed UUID to guard against path traversal etc.
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(jobId)) {
     return res.status(400).json({ error: "Invalid job ID." });
   }
+
+  next();
+}, loginRequired, (req, res) => {
+  const { jobId } = req.params;
 
   const job = jobs.get(jobId);
   if (!job) {
@@ -864,29 +869,38 @@ app.get("/health", (_req, res) => {
 
 const port = parseInt(process.env.PORT || "5000", 10);
 
-app.listen(port, "0.0.0.0", () => {
-  // Startup configuration summary – visible in Azure App Service Log Stream
-  // Sensitive values are masked to show only the first 8 characters.
-  const mask = (v) => (v && v.length > 0 ? `${v.substring(0, 8)}…` : "NOT SET");
-  logger.info("=".repeat(60));
-  logger.info(`EXO Tools listening on http://0.0.0.0:${port}`);
-  logger.info(`NODE_ENV          : ${process.env.NODE_ENV || "not set (defaults to production)"}`);
-  logger.info(`Session directory : ${sessionDir}`);
-  logger.info("-".repeat(60));
-  logger.info("Azure AD / Auth");
-  logger.info(`  CLIENT_ID       : ${mask(config.CLIENT_ID)}`);
-  logger.info(`  TENANT_ID       : ${mask(config.TENANT_ID)}`);
-  logger.info(`  CLIENT_SECRET   : ${config.CLIENT_SECRET ? "set" : "NOT SET"}`);
-  logger.info(`  REDIRECT_URI    : ${config.REDIRECT_URI}`);
-  logger.info(`  ACCESS_GROUP_ID : ${config.ACCESS_GROUP_ID || "not set (all authenticated users allowed)"}`);
-  logger.info("-".repeat(60));
-  logger.info("Exchange Online");
-  logger.info(`  EXO_APP_ID      : ${mask(config.EXO_APP_ID)}`);
-  logger.info(`  EXO_ORGANIZATION: ${config.EXO_ORGANIZATION || "NOT SET"}`);
-  logger.info(`  EXO_CERT_PATH   : ${config.EXO_CERT_PATH || "NOT SET"} (exists: ${config.EXO_CERT_PATH ? fs.existsSync(config.EXO_CERT_PATH) : false})`);
-  logger.info(`  EXO_CERT_PW     : ${config.EXO_CERT_PASSWORD ? "set" : "not set"}`);
-  logger.info(`  PWSH_PATH       : ${config.PWSH_PATH}`);
-  logger.info("=".repeat(60));
-});
+function startServer() {
+  return app.listen(port, "0.0.0.0", () => {
+    // Startup configuration summary – visible in Azure App Service Log Stream
+    // Sensitive values are masked to show only the first 8 characters.
+    const mask = (v) => (v && v.length > 0 ? `${v.substring(0, 8)}…` : "NOT SET");
+    logger.info("=".repeat(60));
+    logger.info(`EXO Tools listening on http://0.0.0.0:${port}`);
+    logger.info(`NODE_ENV          : ${process.env.NODE_ENV || "not set (defaults to production)"}`);
+    logger.info(`Session directory : ${sessionDir}`);
+    logger.info("-".repeat(60));
+    logger.info("Azure AD / Auth");
+    logger.info(`  CLIENT_ID       : ${mask(config.CLIENT_ID)}`);
+    logger.info(`  TENANT_ID       : ${mask(config.TENANT_ID)}`);
+    logger.info(`  CLIENT_SECRET   : ${config.CLIENT_SECRET ? "set" : "NOT SET"}`);
+    logger.info(`  REDIRECT_URI    : ${config.REDIRECT_URI}`);
+    logger.info(`  ACCESS_GROUP_ID : ${config.ACCESS_GROUP_ID || "not set (all authenticated users allowed)"}`);
+    logger.info("-".repeat(60));
+    logger.info("Exchange Online");
+    logger.info(`  EXO_APP_ID      : ${mask(config.EXO_APP_ID)}`);
+    logger.info(`  EXO_ORGANIZATION: ${config.EXO_ORGANIZATION || "NOT SET"}`);
+    logger.info(`  EXO_CERT_PATH   : ${config.EXO_CERT_PATH || "NOT SET"} (exists: ${config.EXO_CERT_PATH ? fs.existsSync(config.EXO_CERT_PATH) : false})`);
+    logger.info(`  EXO_CERT_PW     : ${config.EXO_CERT_PASSWORD ? "set" : "not set"}`);
+    logger.info(`  PWSH_PATH       : ${config.PWSH_PATH}`);
+    logger.info("=".repeat(60));
+  });
+}
+
+if (require.main === module) {
+  startServer();
+}
 
 module.exports = app;
+module.exports.parsePsJson = parsePsJson;
+module.exports.safeRedirectUrl = safeRedirectUrl;
+module.exports.startServer = startServer;
