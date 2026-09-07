@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  WORKFLOW_NODE_VERSION: "18"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NODE_ENV: test
+      SESSION_FILE_DIR: /tmp/exo-session
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.WORKFLOW_NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Smoke check app import
+        run: node -e "const app = require('./app'); if (typeof app !== 'function' || typeof app.use !== 'function') { throw new Error('Expected app.js to export an Express app'); } process.exit(0);"
+
+      - name: Run tests
+        run: npm test --if-present
