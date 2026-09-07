@@ -119,22 +119,25 @@ app.use(
 // X-Forwarded-For header (e.g. "91.37.41.151:59928").  With trust proxy: 1,
 // Express propagates that raw string as req.ip, which express-rate-limit
 // rejects as an invalid IP address.  This helper strips the port so every
-// rate-limiter receives a plain IP address as its key.
+// rate-limiter can hand a plain IP address to express-rate-limit's IPv6-safe
+// key generator.
 function ipKey(req) {
-  let ip = req.ip || req.socket.remoteAddress || "";
-  // Bracket-notation IPv6 with port: "[2001:db8::1]:12345" → "[2001:db8::1]"
+  const ip = req.ip || req.socket.remoteAddress || "";
+  let normalizedIp = ip;
+  // Bracket-notation IPv6 with port: "[2001:db8::1]:12345" → "2001:db8::1"
   if (ip.startsWith("[")) {
-    ip = ip.replace(/\]:.*$/, "]");
-  }
-  // IPv4 with port: "1.2.3.4:12345" → "1.2.3.4" (exactly one colon)
-  const colonCount = (ip.match(/:/g) || []).length;
-  if (colonCount === 1) {
-    ip = ip.substring(0, ip.lastIndexOf(":"));
+    normalizedIp = ip.replace(/^\[|\].*$/g, "");
+  } else {
+    // IPv4 with port: "1.2.3.4:12345" → "1.2.3.4" (exactly one colon)
+    const colonCount = (ip.match(/:/g) || []).length;
+    if (colonCount === 1) {
+      normalizedIp = ip.substring(0, ip.lastIndexOf(":"));
+    }
   }
   // Pure IPv4 or bare IPv6 – return as-is.
   // An empty string here (no remote address at all) is an extreme edge case;
   // Express always populates req.socket.remoteAddress for live TCP connections.
-  return ipKeyGenerator(ip || "127.0.0.1");
+  return ipKeyGenerator(normalizedIp || "127.0.0.1");
 }
 
 // General API rate limiter: 60 requests per minute per IP
